@@ -1,0 +1,252 @@
+---
+title: "R Club - *decontam*"
+date: "4/4/2024"
+author: "Yasmin Hilliam, PhD"
+output: html_notebook
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+### Package set up
+Install and load required packages
+```{r package loading, message = FALSE, results = FALSE}
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install()
+```
+```{r, message = FALSE, results = FALSE}
+BiocManager::install(pkgs = c("tidyverse","phyloseq","decontam"))
+```
+```{r, message = FALSE}
+library(tidyverse)
+library(phyloseq) 
+library(decontam)
+```
+### Plot theme set up
+Sets up a global theme for all plots created during this session
+```{r, message = FALSE}
+theme_set(theme_bw()) # set global theme to bw
+theme_replace(axis.title.x=element_text(size=14), # set individual theme options for plotting
+              axis.title.y=element_text(size=14,angle=90),
+              axis.text.x=element_text(size=12),
+              axis.text.y=element_text(size=12),
+              legend.title=element_text(size=14),
+              legend.text=element_text(size=12))
+```
+### Import data
+Read in necessary data sets for creation of *phyloseq* object
+```{r, message = FALSE}
+read.csv("R.Club.counts.csv",
+         row.names = 1) -> counts # import 16S count data
+
+head(counts)
+
+read.csv("R.Club.metadata.csv") -> metadata # import sample metadata
+
+head(metadata)
+
+read.csv("R.Club.taxonomy.csv",
+         row.names = 1) -> taxonomy # import taxonomy file
+
+head(taxonomy)
+```
+### Combine dataframes using *phyloseq*
+Create *phyloseq* object from imported data sets
+```{r, message = FALSE}
+samp <- metadata # copy metadata object to new samp object
+
+rownames(samp) <- metadata$index # set index column as rownames 
+
+taxonomy <- as.matrix(taxonomy) # convert taxonomny dataframe to matrix
+
+asv <- otu_table(counts, taxa_are_rows = TRUE) # generate otu table object
+samp <- sample_data(samp) # generate sample data object
+tax <- tax_table(taxonomy) # generate taxonomy table object
+
+ps <- merge_phyloseq(asv,samp,tax) # merge into phyloseq object
+
+sample_data(ps) # check sample data element of phyloseq object
+ps # check dimensions of phyloseq object
+```
+### Convert *phyloseq* data back into dataframe
+Allows us to manipulate data outside of *phyloseq*
+```{r, message = FALSE}
+sd <- as.data.frame(sample_data(ps)) # put sample_data into ggplot friendly data frame
+
+sd$librarysize <- sample_sums(ps) #generate librarysize column - by summing read counts
+```
+### Plot library size
+Visualize which samples have small or large library sizes
+```{r, message = FALSE}
+ggplot(data = sd, # input dataframe
+       aes(x = reorder(index,librarysize), # set x axis - reorder sample by ascending library size
+           y = librarysize, # set y axis
+           color = sample_or_control)) + # set color of points
+  geom_point(shape = 1,
+             alpha = 0.5) + # change point size
+  ylab("Library size") + # relabel y axis
+  xlab("Sample") + # relabel x acis
+  scale_color_discrete(labels = c("Control","Sample")) + # relabel legend categories
+  theme(axis.text.x = element_blank(), # change vertical justification 
+        axis.ticks.x = element_blank(), # remove x axis ticks
+        panel.grid.minor = element_blank(), # remove minor gridlines
+        panel.grid.major = element_blank(), # remove major gridlines
+        legend.title = element_blank(), # remove legend title
+        legend.position = c(0.1,0.9), # move legend
+        legend.background = element_rect(color = "black")) # set outer boundary of legend box
+```
+### Identify contaminants by frequency
+This method uses the distribution of the frequency of each ASV and the corresponding sample DNA concentration to identify contaminants
+```{r, message = FALSE}
+contamdfFreq <- isContaminant(ps, # input phyloseq object
+                              method = "frequency", # define method for contaminant identification
+                              conc = "quant") # name column containing DNA concentration information
+
+head(contamdfFreq)
+
+table(contamdfFreq$contaminant)
+```
+Through the "frequency" method, 31 of our 11516 ASVs have been called as contaminants. Here, we used the default probability threshold for rejection of the null hypothesis which is 0.1.
+
+### Activity - how is the number of contaminants called affected by making the model more or less stringent? 
+```{r, message = FALSE}
+contamdfFreqThr <- isContaminant(ps,
+                                 method = "frequency",
+                                 conc = "quant",
+                                 threshold = 0.05) # change probability threshold to examine changes in contaminants
+
+table(contamdfFreqThr$contaminant)
+```
+Now that we've seen how the model uses its probability threshold, let's take a closer look at the identified contaminants to see how the program is deciding which ASVs are contaminants based on frequency and DNA concentration.
+
+### Plot frequency vs. DNA conc.
+```{r, message = FALSE}
+which(contamdfFreq$contaminant) # identify which ASVs are contaminants in our dataframe
+```
+Fortunately, none of the identified contaminants are among the ASVs with the highest frequency in our dataset. 
+Let's plot an identified non-contaminant [1] alongside an identified contaminant [2037] to see how their distributions compare.
+```{r, message = FALSE}
+plot_frequency(ps, 
+               taxa_names(ps)[c(1,2037)], 
+               conc="quant") + 
+  xlab("DNA Concentration (ng/uL)")
+```
+The dashed black line shows a model of a non-contaminant ASV whose frequency will be independent of DNA concentration. The red line shows the expected correlation of a contaminant ASV whose frequency will be inversely proportional to DNA concentration. Which plot represents a contaminant and which represents a non-contaminant? 
+
+### Identify contaminants through prevalence
+*decontam* also provides a method for identifying contaminants through their presence and absence in known samples and controls. This method does not take into account the DNA concentrations of samples, just whether or not they are identified as sample or control in the metadata. 
+```{r, message = FALSE}
+sample_data(ps)$is.neg <- sample_data(ps)$sample_or_control == "control" # create new variable in phyloseq object that identifies negative controls based on sample_or_control column
+
+contamdfPrev <- isContaminant(ps, # input phyloseq object
+                               method = "prevalence", # define method for contaminant identification
+                               neg = "is.neg") # define column for identifying negative controls
+
+table(contamdfPrev$contaminant)
+```
+This method has identified more than double the number of contaminants than the "frequency" method. 
+### Activity - what happens if we change the threshold for contaminant identification in the "prevalence" method?
+Note: at threshold 0.5, *decontam* will call all ASVs that are more prevalent in controls than samples as contaminants.
+```{r, message = FALSE}
+contamdfPrevThr <- isContaminant(ps, # input phyloseq object
+                                 method = "prevalence", # define method for contaminant identification
+                                 neg = "is.neg", # define column for identifying negative controls
+                                 threshold = 0.5) # define threshold for contaminant identification
+
+table(contamdfPrevThr$contaminant)
+```
+# Plot ASV prevalence in samples vs. controls
+```{r, message = FALSE}
+psPrev <- transform_sample_counts(ps, 
+                                function(abund) 1*(abund>0)) # transform sample counts
+
+psPrev.neg <- prune_samples(sample_data(psPrev)$sample_or_control == "control", 
+                            psPrev) # make list of controls
+
+psPrev.pos <- prune_samples(sample_data(psPrev)$sample_or_control == "sample", 
+                            psPrev) # make list of samples
+
+dfPrev <- data.frame(prevPos = taxa_sums(psPrev.pos), # build dataframe
+                     prevNeg = taxa_sums(psPrev.neg),
+                     contaminant = contamdfPrev$contaminant)
+
+ggplot(data = dfPrev, # input dataframe
+       aes(x = prevNeg, # x axis prevalence in negative controls
+           y = prevPos, # y axis prevalence in samples
+           color = contaminant)) + 
+  geom_point(shape = 1) +
+  xlab("Prevalence (controls)") + 
+  ylab("Prevalence (samples)")
+```
+This plot is generated from the contaminants identified using the default threshold of 0.1. However, there are a couple of concerning ASVs in this plot. Which points would you be concerned about if this were your data? 
+Let's create the same plot but this time using our more stringent calling threshold of 0.5.
+```{r, message = FALSE}
+dfPrevThr <- data.frame(prevPos = taxa_sums(psPrev.pos),
+                        prevNeg = taxa_sums(psPrev.neg),
+                        contaminant = contamdfPrevThr$contaminant) # change which data set contaminants are called from to the one generated with our more stringent threshold
+
+ggplot(data = dfPrevThr, # input dataframe
+       aes(x = prevNeg, # x axis prevalence in negative controls
+           y = prevPos, # y axis prevalence in samples
+           color = contaminant)) + 
+  geom_point(shape = 1) +
+  annotate("rect", # add rectangle to highlight points
+           xmin = 17, # x axis start point
+           xmax = 19, # x axis end point
+           ymin = 320, # y axis start point
+           ymax = 380, # y axis end point
+           fill = NA, # no fill
+           color = "red") + # red border
+  xlab("Prevalence (controls)") + # x axis label
+  ylab("Prevalence (samples)") # y axis label 
+```
+Now we can see that the two ASVs of concern have been called as contaminants. In the case of this data, a more stringent calling method may be better suited for identifying contaminants. 
+Now we need to filter identified contaminants from our *phyloseq* object.
+
+### Remove contaminants for downstream analysis
+```{r, message = FALSE}
+ps # check dimensions of current phyloseq object
+```
+```{r, message = FALSE}
+psNoncontam <- prune_taxa(!contamdfPrevThr$contaminant, 
+                          ps)
+
+# contaminant is a Boolean variable so using an exclamation point tells phyloseq not to select ASVs which have TRUE in the contaminant column for taxa pruning
+
+psNoncontam # check dimensions of new phyloseq object
+```
+Voila! Now we have contaminant-free data that can be carried forward into further analysis. 
+
+
+## Activities
+### Combined models
+Prevalence and frequency are the two basic models by which *decontam* identifies contaminants. However, the package also offers models that combine both methods.
+
+1. Run the help command to open the *decontam* manual and read about the other available methods.
+```{r, message = FALSE}
+?isContaminant
+```
+
+2. Identify contaminants using the "both" method. How many contaminants are identified using this method?
+```{r, message = FALSE}
+
+```
+
+3. Generate a plot of prevalence in controls vs. samples. Does the "both" method seem suitable for this dataset? Why?
+```{r, message = FALSE}
+
+```
+
+When using methods that combine both frequency and prevalence calculations, you can provide a vector with a length of two to the threshold argument: the first value sets the threshold for the frequency test and the second value sets the threshold for the prevalence test. Using the "either" method, attempt to optimise these values. Plot prevalence in samples vs. controls to check that ASVs of concern are being correctly identified as contaminants.
+
+4. Identify contaminants using "either" method
+```{r, message = FALSE}
+
+```
+
+5. Plot prevalence in samples vs. controls
+```{r, message = FALSE}
+
+```

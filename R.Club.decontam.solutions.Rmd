@@ -1,0 +1,98 @@
+---
+title: "R Club - *decontam* solutions"
+date: "4/4/2024"
+author: "Yasmin Hilliam, PhD"
+output: html_notebook
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+### Package set up
+Install and load required packages
+```{r package loading, results = FALSE, message = FALSE}
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install()
+```
+```{r, results = FALSE, message = FALSE}
+BiocManager::install(pkgs = c("tidyverse","phyloseq","decontam"))
+```
+```{r, message = FALSE}
+library(tidyverse)
+library(phyloseq) 
+library(decontam)
+```
+### Plot theme set up
+Sets up a global theme for all plots created during this session
+```{r, message = FALSE}
+theme_set(theme_bw()) # set global theme to bw
+theme_replace(axis.title.x=element_text(size=14), # set individual theme options for plotting
+              axis.title.y=element_text(size=14,angle=90),
+              axis.text.x=element_text(size=12),
+              axis.text.y=element_text(size=12),
+              legend.title=element_text(size=14),
+              legend.text=element_text(size=12))
+```
+## Activities
+### Combined models
+Prevalence and frequency are the two basic models by which *decontam* identifies contaminants. However, the package also offers models that combine both methods.
+
+1. Run the help command to open the *decontam* manual and read about the other available methods.
+```{r, message = FALSE}
+?isContaminant
+```
+
+2. Identify contaminants using the "both" method. How many contaminants are identified using this method?
+```{r, message = FALSE}
+contamdfBoth <- isContaminant(ps,
+                              method = "both",
+                              neg = "is.neg",
+                              conc = "quant")
+
+table(contamdfBoth$contaminant)
+```
+
+3. Generate a plot of prevalence in controls vs. samples. Does the "both" method seem suitable for this dataset? Why?
+```{r, message = FALSE}
+dfBoth <- data.frame(prevPos = taxa_sums(psPrev.pos), # build dataframe
+                     prevNeg = taxa_sums(psPrev.neg),
+                     contaminant = contamdfBoth$contaminant) # change source of contaminant identification to combined dataset
+
+ggplot(data = dfBoth, # input dataframe
+       aes(x = prevNeg, # x axis prevalence in negative controls
+           y = prevPos, # y axis prevalence in samples
+           color = contaminant)) + 
+  geom_point(shape = 1) +
+  xlab("Prevalence (controls)") + 
+  ylab("Prevalence (samples)")
+```
+
+When using methods that combine both frequency and prevalence calculations, you can provide a vector with a length of two to the threshold argument: the first value sets the threshold for the frequency test and the second value sets the threshold for the prevalence test. Using the "either" method, attempt to optimise these values. Plot prevalence in samples vs. controls to check that ASVs of concern are being correctly identified as contaminants.
+
+4. Identify contaminants using "either" method
+```{r, message = FALSE}
+contamdfEith <- isContaminant(ps,
+                              method = "either",
+                              neg = "is.neg",
+                              conc = "quant",
+                              threshold = c(0.1, 0.5))
+
+table(contamdfEith$contaminant)
+```
+
+5. Plot prevalence in samples vs. controls
+```{r, message = FALSE}
+dfEith <- data.frame(prevPos = taxa_sums(psPrev.pos), # build dataframe
+                     prevNeg = taxa_sums(psPrev.neg),
+                     contaminant = contamdfEith$contaminant)
+
+ggplot(data = dfEith, # input dataframe
+       aes(x = prevNeg, # x axis prevalence in negative controls
+           y = prevPos, # y axis prevalence in samples
+           color = contaminant)) + 
+  geom_point(shape = 1) +
+  xlab("Prevalence (controls)") + 
+  ylab("Prevalence (samples)")
+```
